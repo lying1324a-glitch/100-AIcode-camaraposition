@@ -48,8 +48,8 @@
 
 功能：
 - 计算缩放后的尺寸：
-  - `scaled_width = round(width * scale)`
-  - `scaled_height = round(height * scale)`
+  - `scaled_width = int(width * scale)`
+  - `scaled_height = int(height * scale)`
 - 适配 ComfyUI 自带“获取图像尺寸”节点输出的宽高整型数值。
 
 输出：
