@@ -1,6 +1,6 @@
 # ComfyUI 全景图畸变比例尺节点
 
-本仓库已重构为 **3 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”。
+本仓库提供 **4 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”与尺寸缩放计算。
 
 ## 设计逻辑
 
@@ -41,12 +41,28 @@
 - `matched_scale_m_per_px`
 - `matched_sample_count`
 
+---
+
+### 4) `Scaled Dimensions`
+输入：`width(INT)`, `height(INT)`, `scale(FLOAT)`
+
+功能：
+- 计算缩放后的尺寸：
+  - `scaled_width = round(width * scale)`
+  - `scaled_height = round(height * scale)`
+- 适配 ComfyUI 自带“获取图像尺寸”节点输出的宽高整型数值。
+
+输出：
+- `scaled_width`
+- `scaled_height`
+
 ## 典型工作流
 
 `Load Image`
 → `Panorama Distortion Scale Table`
 → `Panorama Distortion Feature`
 → `Distortion Scale Lookup (Q70)`
+→ `Scaled Dimensions`
 
 ## 安装
 
