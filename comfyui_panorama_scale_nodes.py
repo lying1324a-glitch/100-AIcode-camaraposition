@@ -148,14 +148,14 @@ class ScaledDimensionsNode:
             }
         }
 
-    RETURN_TYPES = ("INT", "INT")
+    RETURN_TYPES = ("FLOAT", "FLOAT")
     RETURN_NAMES = ("scaled_width", "scaled_height")
     FUNCTION = "compute_scaled_dimensions"
     CATEGORY = "Panorama/Utility"
 
     def compute_scaled_dimensions(self, width, height, scale):
-        scaled_width = int(float(width) * float(scale))
-        scaled_height = int(float(height) * float(scale))
+        scaled_width = float(width) * float(scale)
+        scaled_height = float(height) * float(scale)
         return (scaled_width, scaled_height)
 
 

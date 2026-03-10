@@ -48,8 +48,9 @@
 
 功能：
 - 计算缩放后的尺寸：
-  - `scaled_width = int(width * scale)`
-  - `scaled_height = int(height * scale)`
+  - `scaled_width = width * scale`
+  - `scaled_height = height * scale`
+- 输出类型为 `FLOAT`，支持小数结果（例如 `0.12382`）。
 - 适配 ComfyUI 自带“获取图像尺寸”节点输出的宽高整型数值。
 
 输出：
