@@ -159,6 +159,108 @@ class ScaledDimensionsNode:
         return (scaled_width, scaled_height)
 
 
+class ProportionalVolumeLimiterNode:
+    """
+    节点5：
+    - 输入：长、宽、高、scaled_width、scaled_height
+    - 按长宽高比例计算 4 种约束下的体积，并取最小体积方案
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "length": ("FLOAT", {"default": 5.0, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "width": ("FLOAT", {"default": 4.0, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "height": ("FLOAT", {"default": 2.8, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "scaled_width": ("FLOAT", {"default": 1.0, "min": 0.0001, "max": 100000.0, "step": 0.001}),
+                "scaled_height": ("FLOAT", {"default": 1.0, "min": 0.0001, "max": 100000.0, "step": 0.001}),
+            }
+        }
+
+    RETURN_TYPES = ("FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT")
+    RETURN_NAMES = (
+        "length",
+        "width",
+        "height",
+        "output",
+        "volume_with_scaled_width_as_length",
+        "volume_with_scaled_width_as_width",
+        "volume_with_scaled_width_as_diagonal",
+        "volume_with_scaled_height_as_height",
+    )
+    FUNCTION = "compute_min_volume"
+    CATEGORY = "Panorama/Utility"
+
+    def compute_min_volume(self, length, width, height, scaled_width, scaled_height):
+        l = float(length)
+        w = float(width)
+        h = float(height)
+        sw = float(scaled_width)
+        sh = float(scaled_height)
+
+        volume1, dims1 = self._volume_when_target_length(l, w, h, sw)
+        volume2, dims2 = self._volume_when_target_width(l, w, h, sw)
+        volume3, dims3 = self._volume_when_target_diagonal(l, w, h, sw)
+        volume4, dims4 = self._volume_when_target_height(l, w, h, sh)
+
+        candidates = [
+            (volume1, dims1),
+            (volume2, dims2),
+            (volume3, dims3),
+            (volume4, dims4),
+        ]
+        output_volume, selected_dims = min(candidates, key=lambda item: item[0])
+
+        return (
+            float(selected_dims[0]),
+            float(selected_dims[1]),
+            float(selected_dims[2]),
+            float(output_volume),
+            float(volume1),
+            float(volume2),
+            float(volume3),
+            float(volume4),
+        )
+
+    @staticmethod
+    def _volume_when_target_length(length, width, height, target_length):
+        factor = target_length / length
+        new_length = target_length
+        new_width = width * factor
+        new_height = height * factor
+        volume = new_length * new_width * new_height
+        return volume, (new_length, new_width, new_height)
+
+    @staticmethod
+    def _volume_when_target_width(length, width, height, target_width):
+        factor = target_width / width
+        new_length = length * factor
+        new_width = target_width
+        new_height = height * factor
+        volume = new_length * new_width * new_height
+        return volume, (new_length, new_width, new_height)
+
+    @staticmethod
+    def _volume_when_target_diagonal(length, width, height, target_diagonal):
+        base_diagonal = math.sqrt(length * length + width * width)
+        factor = target_diagonal / base_diagonal
+        new_length = length * factor
+        new_width = width * factor
+        new_height = height * factor
+        volume = new_length * new_width * new_height
+        return volume, (new_length, new_width, new_height)
+
+    @staticmethod
+    def _volume_when_target_height(length, width, height, target_height):
+        factor = target_height / height
+        new_length = length * factor
+        new_width = width * factor
+        new_height = target_height
+        volume = new_length * new_width * new_height
+        return volume, (new_length, new_width, new_height)
+
+
 def _validate_image(image):
     if image.ndim != 4:
         raise ValueError("Expected IMAGE tensor in shape [B, H, W, C].")
@@ -250,6 +352,7 @@ NODE_CLASS_MAPPINGS = {
     "PanoramaDistortionFeature": PanoramaDistortionFeatureNode,
     "DistortionScaleLookup": DistortionScaleLookupNode,
     "ScaledDimensions": ScaledDimensionsNode,
+    "ProportionalVolumeLimiter": ProportionalVolumeLimiterNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -257,4 +360,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PanoramaDistortionFeature": "Panorama Distortion Feature",
     "DistortionScaleLookup": "Distortion Scale Lookup (Q70)",
     "ScaledDimensions": "Scaled Dimensions",
+    "ProportionalVolumeLimiter": "Proportional Volume Limiter",
 }
