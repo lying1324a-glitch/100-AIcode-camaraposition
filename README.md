@@ -1,6 +1,6 @@
 # ComfyUI 全景图畸变比例尺节点
 
-本仓库提供 **4 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”与尺寸缩放计算。
+本仓库提供 **5 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”、尺寸缩放计算与体积约束推导。
 
 ## 设计逻辑
 
@@ -57,6 +57,30 @@
 - `scaled_width`
 - `scaled_height`
 
+---
+
+### 5) `Proportional Volume Limiter`
+输入：`length`, `width`, `height`, `scaled_width`, `scaled_height`
+
+功能：
+- 在保持 `length:width:height` 比例不变的基础上，计算 4 种体积：
+  1. 将 `scaled_width` 作为长时的体积。
+  2. 将 `scaled_width` 作为宽时的体积。
+  3. 将 `scaled_width` 作为对角线 `sqrt(length^2 + width^2)` 时的体积。
+  4. 将 `scaled_height` 作为高时的体积。
+- 取上述 4 个体积中的最小值作为 `output`。
+- 同时输出最小体积对应的 `length`、`width`、`height`，以及 4 个体积值。
+
+输出：
+- `length`
+- `width`
+- `height`
+- `output`
+- `volume_with_scaled_width_as_length`
+- `volume_with_scaled_width_as_width`
+- `volume_with_scaled_width_as_diagonal`
+- `volume_with_scaled_height_as_height`
+
 ## 典型工作流
 
 `Load Image`
@@ -64,6 +88,7 @@
 → `Panorama Distortion Feature`
 → `Distortion Scale Lookup (Q70)`
 → `Scaled Dimensions`
+→ `Proportional Volume Limiter`
 
 ## 安装
 
