@@ -44,12 +44,13 @@
 ---
 
 ### 4) `Scaled Dimensions`
-输入：`width`, `height`, `scale`
+输入：`width(INT)`, `height(INT)`, `scale(FLOAT)`
 
 功能：
 - 计算缩放后的尺寸：
-  - `scaled_width = width * scale`
-  - `scaled_height = height * scale`
+  - `scaled_width = round(width * scale)`
+  - `scaled_height = round(height * scale)`
+- 适配 ComfyUI 自带“获取图像尺寸”节点输出的宽高整型数值。
 
 输出：
 - `scaled_width`

@@ -134,6 +134,7 @@ class ScaledDimensionsNode:
     """
     节点4：
     - 输入：宽、高、比例尺
+    - 兼容 ComfyUI “获取图像尺寸”节点输出的 width/height（INT）
     - 输出：按比例尺缩放后的宽高（width * scale, height * scale）
     """
 
@@ -141,20 +142,21 @@ class ScaledDimensionsNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "width": ("FLOAT", {"default": 1024.0, "min": 0.0, "max": 100000.0, "step": 1.0}),
-                "height": ("FLOAT", {"default": 512.0, "min": 0.0, "max": 100000.0, "step": 1.0}),
+                "width": ("INT", {"default": 1024, "min": 0, "max": 100000, "step": 1}),
+                "height": ("INT", {"default": 512, "min": 0, "max": 100000, "step": 1}),
                 "scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1000.0, "step": 0.001}),
             }
         }
 
-    RETURN_TYPES = ("FLOAT", "FLOAT")
+    RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("scaled_width", "scaled_height")
     FUNCTION = "compute_scaled_dimensions"
     CATEGORY = "Panorama/Utility"
 
     def compute_scaled_dimensions(self, width, height, scale):
-        scale = float(scale)
-        return (float(width) * scale, float(height) * scale)
+        scaled_width = int(round(float(width) * float(scale)))
+        scaled_height = int(round(float(height) * float(scale)))
+        return (scaled_width, scaled_height)
 
 
 def _validate_image(image):
