@@ -1,6 +1,6 @@
 # ComfyUI 全景图畸变比例尺节点
 
-本仓库提供 **5 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”、尺寸缩放计算与体积约束推导。
+本仓库提供 **6 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”、尺寸缩放计算、体积约束推导与深度裁剪区域尺寸估计。
 
 ## 设计逻辑
 
@@ -81,6 +81,27 @@
 - `volume_with_scaled_width_as_diagonal`
 - `volume_with_scaled_height_as_height`
 
+---
+
+### 6) `Panorama Depth Crop Size Estimator`
+输入：`depth_image`, `room_length_m`, `room_width_m`, `room_height_m`, `crop_image`, `depth_is_meters`
+
+功能：
+- 在全景深度图 `depth_image` 中自动匹配 `crop_image` 的位置（模板匹配）。
+- 已知房间长宽高后，按球面全景角分辨率估计裁剪区域实际尺寸：
+  - `estimated_width_m ≈ depth * (crop_w * 2π / pano_w)`
+  - `estimated_height_m ≈ depth * (crop_h * π / pano_h)`
+- 若 `depth_is_meters=true`，深度图数值直接视为米。
+- 若 `depth_is_meters=false`，自动将深度图 95 分位映射到房间平面对角线，以完成未标定深度图到米制的近似换算。
+
+输出：
+- `estimated_width_m`
+- `estimated_height_m`
+- `estimated_area_m2`
+- `estimated_depth_m`
+- `bbox_x`, `bbox_y`, `bbox_w`, `bbox_h`
+- `match_score`
+
 ## 典型工作流
 
 `Load Image`
@@ -89,6 +110,11 @@
 → `Distortion Scale Lookup (Q70)`
 → `Scaled Dimensions`
 → `Proportional Volume Limiter`
+
+或（深度裁剪尺寸估计场景）：
+
+`Load Depth Image`
+→ `Panorama Depth Crop Size Estimator`
 
 ## 安装
 

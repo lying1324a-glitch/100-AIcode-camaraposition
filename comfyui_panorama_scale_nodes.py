@@ -232,6 +232,7 @@ class ProportionalVolumeLimiterNode:
         volume = new_length * new_width * new_height
         return volume, (new_length, new_width, new_height)
 
+
     @staticmethod
     def _volume_when_target_width(length, width, height, target_width):
         factor = target_width / width
@@ -259,6 +260,87 @@ class ProportionalVolumeLimiterNode:
         new_height = target_height
         volume = new_length * new_width * new_height
         return volume, (new_length, new_width, new_height)
+
+
+class PanoramaDepthCropSizeEstimatorNode:
+    """
+    节点6：
+    - 输入：全景深度图 + 房间长宽高 + 从全景中截出的局部图
+    - 自动在深度图中做模板匹配定位截取区域
+    - 基于球面全景几何关系估计该局部区域的实际宽高尺寸（米）
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "depth_image": ("IMAGE",),
+                "room_length_m": ("FLOAT", {"default": 5.0, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "room_width_m": ("FLOAT", {"default": 4.0, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "room_height_m": ("FLOAT", {"default": 2.8, "min": 0.0001, "max": 10000.0, "step": 0.01}),
+                "crop_image": ("IMAGE",),
+                "depth_is_meters": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    RETURN_TYPES = ("FLOAT", "FLOAT", "FLOAT", "FLOAT", "INT", "INT", "INT", "INT", "FLOAT")
+    RETURN_NAMES = (
+        "estimated_width_m",
+        "estimated_height_m",
+        "estimated_area_m2",
+        "estimated_depth_m",
+        "bbox_x",
+        "bbox_y",
+        "bbox_w",
+        "bbox_h",
+        "match_score",
+    )
+    FUNCTION = "estimate_size"
+    CATEGORY = "Panorama/Depth"
+
+    def estimate_size(self, depth_image, room_length_m, room_width_m, room_height_m, crop_image, depth_is_meters):
+        _validate_image(depth_image)
+        _validate_image(crop_image)
+
+        depth_gray = _to_gray(depth_image)
+        crop_gray = _to_gray(crop_image)
+
+        depth_h, depth_w = depth_gray.shape[-2], depth_gray.shape[-1]
+        crop_h, crop_w = crop_gray.shape[-2], crop_gray.shape[-1]
+        if crop_h > depth_h or crop_w > depth_w:
+            raise ValueError("crop_image 尺寸不能大于 depth_image")
+
+        x, y, score = _find_best_template_match(depth_gray, crop_gray)
+
+        patch = depth_gray[:, :, y : y + crop_h, x : x + crop_w]
+        depth_m = _estimate_depth_in_meters(
+            patch=patch,
+            full_depth=depth_gray,
+            room_length_m=float(room_length_m),
+            room_width_m=float(room_width_m),
+            room_height_m=float(room_height_m),
+            depth_is_meters=bool(depth_is_meters),
+        )
+
+        yaw_per_px = (2.0 * math.pi) / float(depth_w)
+        pitch_per_px = math.pi / float(depth_h)
+
+        width_m = float(depth_m) * float(crop_w) * yaw_per_px
+        height_m = float(depth_m) * float(crop_h) * pitch_per_px
+        area_m2 = width_m * height_m
+
+        return (
+            float(width_m),
+            float(height_m),
+            float(area_m2),
+            float(depth_m),
+            int(x),
+            int(y),
+            int(crop_w),
+            int(crop_h),
+            float(score),
+        )
+
 
 
 def _validate_image(image):
@@ -347,12 +429,66 @@ def _make_feature_scale_table(feature_values, scale_values, bins):
     return rows
 
 
+def _find_best_template_match(search_image, template_image):
+    """
+    在单通道图像中寻找 template 最佳匹配位置，返回左上角与相似度分数。
+    两者输入 shape: [1,1,H,W]
+    """
+    eps = 1e-12
+
+    template = template_image - torch.mean(template_image)
+    tnorm = torch.sqrt(torch.sum(template * template) + eps)
+
+    kernel = template
+    numerator = F.conv2d(search_image, kernel)
+
+    ones = torch.ones_like(template)
+    local_mean = F.conv2d(search_image, ones) / float(template.shape[-2] * template.shape[-1])
+    centered = search_image - F.pad(
+        local_mean,
+        (
+            template.shape[-1] // 2,
+            template.shape[-1] - 1 - template.shape[-1] // 2,
+            template.shape[-2] // 2,
+            template.shape[-2] - 1 - template.shape[-2] // 2,
+        ),
+        mode="replicate",
+    )
+    local_energy = F.conv2d(centered * centered, ones)
+    denom = torch.sqrt(local_energy + eps) * tnorm
+    zncc = numerator / (denom + eps)
+
+    flat_idx = int(torch.argmax(zncc).item())
+    out_h, out_w = zncc.shape[-2], zncc.shape[-1]
+    y = flat_idx // out_w
+    x = flat_idx % out_w
+    score = float(zncc[0, 0, y, x].item())
+    return x, y, score
+
+
+def _estimate_depth_in_meters(patch, full_depth, room_length_m, room_width_m, room_height_m, depth_is_meters):
+    patch_median = float(torch.median(patch).item())
+    if depth_is_meters:
+        return max(1e-4, patch_median)
+
+    # 对未标定深度图进行简单尺度归一：将95分位映射到房间平面对角线。
+    # 该假设适配典型矩形房间全景：最远可见点通常接近水平对角尺度。
+    room_diag = math.sqrt(room_length_m * room_length_m + room_width_m * room_width_m)
+    q95 = float(torch.quantile(full_depth.view(-1), 0.95).item())
+    if q95 <= 1e-8:
+        raise ValueError("depth_image 数值无效，无法估计深度尺度")
+
+    depth_m = patch_median / q95 * room_diag
+    return max(1e-4, depth_m)
+
+
 NODE_CLASS_MAPPINGS = {
     "PanoramaDistortionScaleTable": PanoramaDistortionScaleTableNode,
     "PanoramaDistortionFeature": PanoramaDistortionFeatureNode,
     "DistortionScaleLookup": DistortionScaleLookupNode,
     "ScaledDimensions": ScaledDimensionsNode,
     "ProportionalVolumeLimiter": ProportionalVolumeLimiterNode,
+    "PanoramaDepthCropSizeEstimator": PanoramaDepthCropSizeEstimatorNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -361,4 +497,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DistortionScaleLookup": "Distortion Scale Lookup (Q70)",
     "ScaledDimensions": "Scaled Dimensions",
     "ProportionalVolumeLimiter": "Proportional Volume Limiter",
+    "PanoramaDepthCropSizeEstimator": "Panorama Depth Crop Size Estimator",
 }
