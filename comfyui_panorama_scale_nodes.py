@@ -511,6 +511,7 @@ class PanoramaCropMetricEstimatorNode:
                 "crop_h": ("INT", {"default": 256, "min": 1, "max": 100000, "step": 1}),
                 "depth_is_meters": ("BOOLEAN", {"default": False}),
                 "box_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "match_max_side": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
             },
             "optional": {
                 "panorama_image": ("IMAGE",),
@@ -547,6 +548,7 @@ class PanoramaCropMetricEstimatorNode:
         crop_h,
         depth_is_meters,
         box_index,
+        match_max_side,
         panorama_image=None,
         crop_image=None,
         boxes_json="",
@@ -583,7 +585,10 @@ class PanoramaCropMetricEstimatorNode:
             if crop_gray.shape[-2] > pano_gray.shape[-2] or crop_gray.shape[-1] > pano_gray.shape[-1]:
                 raise ValueError("crop_image 尺寸不能大于 panorama_image")
 
-            x0, y0, match_score = _find_best_template_match(pano_gray, crop_gray)
+            with torch.no_grad():
+                x0, y0, match_score = _find_best_template_match_fast(
+                    pano_gray, crop_gray, max_side=int(match_max_side)
+                )
             w = int(crop_gray.shape[-1])
             h = int(crop_gray.shape[-2])
             bbox_source = "crop_image_match"
@@ -820,6 +825,44 @@ def _make_feature_scale_table(feature_values, scale_values, bins):
     if not rows:
         raise ValueError("无法构建畸变特性表：图像特征为空")
     return rows
+
+
+
+def _find_best_template_match_fast(search_image, template_image, max_side=1024):
+    """
+    加速模板匹配：当全景过大时先等比例降采样后匹配，再映射回原图坐标。
+    """
+    _, _, h, w = search_image.shape
+    _, _, th, tw = template_image.shape
+
+    if th > h or tw > w:
+        raise ValueError("template_image 尺寸不能大于 search_image")
+
+    max_side = max(64, int(max_side))
+    long_side = max(h, w)
+    if long_side <= max_side:
+        return _find_best_template_match(search_image, template_image)
+
+    scale = float(max_side) / float(long_side)
+    new_h = max(64, int(round(h * scale)))
+    new_w = max(64, int(round(w * scale)))
+    new_th = max(8, min(new_h - 1, int(round(th * scale))))
+    new_tw = max(8, min(new_w - 1, int(round(tw * scale))))
+
+    # 防止降采样后模板尺寸退化导致非法卷积
+    if new_th >= new_h or new_tw >= new_w:
+        return _find_best_template_match(search_image, template_image)
+
+    search_small = F.interpolate(search_image, size=(new_h, new_w), mode="bilinear", align_corners=False)
+    template_small = F.interpolate(template_image, size=(new_th, new_tw), mode="bilinear", align_corners=False)
+
+    sx, sy, score = _find_best_template_match(search_small, template_small)
+
+    x = int(round(float(sx) / scale))
+    y = int(round(float(sy) / scale))
+    x = max(0, min(x, w - tw))
+    y = max(0, min(y, h - th))
+    return x, y, score
 
 
 def _find_best_template_match(search_image, template_image):
