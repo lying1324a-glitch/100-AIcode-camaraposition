@@ -495,7 +495,7 @@ class RoomPoseFromPanoramaNode:
 class PanoramaCropMetricEstimatorNode:
     """
     节点9：
-    - 输入：全景图中任意裁剪框 + 融合深度图 + 相机位姿
+    - 输入：融合深度图 + 相机位姿 +（框坐标 / crop_image模板匹配 / boxes_json）
     - 输出：该区域的实际宽高/面积估计
     """
 
@@ -510,25 +510,88 @@ class PanoramaCropMetricEstimatorNode:
                 "crop_w": ("INT", {"default": 256, "min": 1, "max": 100000, "step": 1}),
                 "crop_h": ("INT", {"default": 256, "min": 1, "max": 100000, "step": 1}),
                 "depth_is_meters": ("BOOLEAN", {"default": False}),
-            }
+                "box_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+            },
+            "optional": {
+                "panorama_image": ("IMAGE",),
+                "crop_image": ("IMAGE",),
+                "boxes_json": ("STRING", {"default": ""}),
+            },
         }
 
-    RETURN_TYPES = ("FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT")
-    RETURN_NAMES = ("estimated_width_m", "estimated_height_m", "estimated_area_m2", "median_depth_m", "center_yaw_deg", "center_pitch_deg")
+    RETURN_TYPES = ("FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "INT", "INT", "INT", "INT", "FLOAT", "STRING")
+    RETURN_NAMES = (
+        "estimated_width_m",
+        "estimated_height_m",
+        "estimated_area_m2",
+        "median_depth_m",
+        "center_yaw_deg",
+        "center_pitch_deg",
+        "bbox_x",
+        "bbox_y",
+        "bbox_w",
+        "bbox_h",
+        "match_score",
+        "bbox_source",
+    )
     FUNCTION = "estimate_crop_metric"
     CATEGORY = "Panorama/Measurement"
 
-    def estimate_crop_metric(self, fused_depth_image, camera_pose_json, crop_x, crop_y, crop_w, crop_h, depth_is_meters):
+    def estimate_crop_metric(
+        self,
+        fused_depth_image,
+        camera_pose_json,
+        crop_x,
+        crop_y,
+        crop_w,
+        crop_h,
+        depth_is_meters,
+        box_index,
+        panorama_image=None,
+        crop_image=None,
+        boxes_json="",
+    ):
         _validate_image(fused_depth_image)
         pose = json.loads(camera_pose_json)
 
         depth = _to_gray(fused_depth_image)
         _, _, pano_h, pano_w = depth.shape
 
-        x0 = int(max(0, min(crop_x, pano_w - 1)))
-        y0 = int(max(0, min(crop_y, pano_h - 1)))
-        w = int(max(1, min(crop_w, pano_w - x0)))
-        h = int(max(1, min(crop_h, pano_h - y0)))
+        x0 = int(crop_x)
+        y0 = int(crop_y)
+        w = int(crop_w)
+        h = int(crop_h)
+        match_score = 1.0
+        bbox_source = "manual"
+
+        # 优先级1：boxes_json + box_index
+        parsed_box = _extract_box_from_json(boxes_json, int(box_index))
+        if parsed_box is not None:
+            x0, y0, w, h = parsed_box
+            bbox_source = "boxes_json"
+
+        # 优先级2：crop_image + panorama_image 模板匹配（覆盖 manual，低于 boxes_json）
+        elif crop_image is not None:
+            if panorama_image is None:
+                raise ValueError("当输入 crop_image 时，需同时输入 panorama_image 以定位裁剪区域")
+            _validate_image(crop_image)
+            _validate_image(panorama_image)
+
+            pano_gray = _to_gray(panorama_image)
+            crop_gray = _to_gray(crop_image)
+
+            if crop_gray.shape[-2] > pano_gray.shape[-2] or crop_gray.shape[-1] > pano_gray.shape[-1]:
+                raise ValueError("crop_image 尺寸不能大于 panorama_image")
+
+            x0, y0, match_score = _find_best_template_match(pano_gray, crop_gray)
+            w = int(crop_gray.shape[-1])
+            h = int(crop_gray.shape[-2])
+            bbox_source = "crop_image_match"
+
+        x0 = int(max(0, min(x0, pano_w - 1)))
+        y0 = int(max(0, min(y0, pano_h - 1)))
+        w = int(max(1, min(w, pano_w - x0)))
+        h = int(max(1, min(h, pano_h - y0)))
 
         patch = depth[:, :, y0 : y0 + h, x0 : x0 + w]
         depth_med = float(torch.median(patch).item())
@@ -564,8 +627,58 @@ class PanoramaCropMetricEstimatorNode:
             float(depth_m),
             float(math.degrees(center_yaw) + yaw_bias),
             float(math.degrees(center_pitch) + pitch_bias),
+            int(x0),
+            int(y0),
+            int(w),
+            int(h),
+            float(match_score),
+            str(bbox_source),
         )
 
+
+
+def _extract_box_from_json(boxes_json, box_index):
+    if boxes_json is None:
+        return None
+    raw = str(boxes_json).strip()
+    if not raw:
+        return None
+
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        if "boxes" in data:
+            boxes = data.get("boxes", [])
+        elif all(k in data for k in ("x", "y", "w", "h")):
+            boxes = [data]
+        else:
+            boxes = []
+    elif isinstance(data, list):
+        boxes = data
+    else:
+        boxes = []
+
+    if not boxes:
+        return None
+
+    idx = max(0, min(int(box_index), len(boxes) - 1))
+    item = boxes[idx]
+    if not isinstance(item, dict):
+        return None
+
+    x = item.get("x", item.get("left", item.get("xmin", 0)))
+    y = item.get("y", item.get("top", item.get("ymin", 0)))
+    w = item.get("w", item.get("width", None))
+    h = item.get("h", item.get("height", None))
+
+    if w is None and "xmax" in item:
+        w = float(item["xmax"]) - float(x)
+    if h is None and "ymax" in item:
+        h = float(item["ymax"]) - float(y)
+
+    if w is None or h is None:
+        return None
+
+    return int(float(x)), int(float(y)), int(max(1.0, float(w))), int(max(1.0, float(h)))
 
 
 def _validate_image(image):

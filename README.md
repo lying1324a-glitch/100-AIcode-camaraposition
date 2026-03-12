@@ -21,9 +21,12 @@
 
 ### C) `Panorama Crop Real-world Size Estimator`
 - 内部类名：`PanoramaCropMetricEstimator`
-- 输入：`fused_depth_image`、`camera_pose_json`、`crop_x/y/w/h`、`depth_is_meters`
-- 输出：`estimated_width_m`、`estimated_height_m`、`estimated_area_m2`、`median_depth_m`、`center_yaw_deg`、`center_pitch_deg`
-- 作用：对全景中任意裁剪区域做米制尺寸估计。
+- 输入：
+  - 必填：`fused_depth_image`、`camera_pose_json`、`crop_x/y/w/h`、`depth_is_meters`、`box_index`
+  - 可选1：`panorama_image` + `crop_image`（自动模板匹配定位）
+  - 可选2：`boxes_json`（直接读取框坐标，再按 `box_index` 选框）
+- 输出：`estimated_width_m`、`estimated_height_m`、`estimated_area_m2`、`median_depth_m`、`center_yaw_deg`、`center_pitch_deg`、`bbox_x/y/w/h`、`match_score`、`bbox_source`
+- 作用：对全景中任意裁剪区域做米制尺寸估计，并支持“传 crop 图自动找位置”或“传 boxes_json 直接取框”。
 
 ---
 
