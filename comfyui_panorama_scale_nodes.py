@@ -511,7 +511,7 @@ class PanoramaCropMetricEstimatorNode:
                 "crop_h": ("INT", {"default": 256, "min": 1, "max": 100000, "step": 1}),
                 "depth_is_meters": ("BOOLEAN", {"default": False}),
                 "box_index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
-                "match_max_side": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+                "match_max_side": ("STRING", {"default": "1024"}),
             },
             "optional": {
                 "panorama_image": ("IMAGE",),
@@ -586,8 +586,9 @@ class PanoramaCropMetricEstimatorNode:
                 raise ValueError("crop_image 尺寸不能大于 panorama_image")
 
             with torch.no_grad():
+                max_side_value = _parse_int_with_default(match_max_side, 1024, min_value=256, max_value=4096)
                 x0, y0, match_score = _find_best_template_match_fast(
-                    pano_gray, crop_gray, max_side=int(match_max_side)
+                    pano_gray, crop_gray, max_side=max_side_value
                 )
             w = int(crop_gray.shape[-1])
             h = int(crop_gray.shape[-2])
@@ -641,6 +642,23 @@ class PanoramaCropMetricEstimatorNode:
         )
 
 
+
+
+
+def _parse_int_with_default(value, default_value, min_value=None, max_value=None):
+    if value is None:
+        parsed = int(default_value)
+    elif isinstance(value, str):
+        raw = value.strip()
+        parsed = int(default_value) if raw == "" else int(float(raw))
+    else:
+        parsed = int(value)
+
+    if min_value is not None:
+        parsed = max(int(min_value), parsed)
+    if max_value is not None:
+        parsed = min(int(max_value), parsed)
+    return parsed
 
 
 def _safe_quantile(tensor, q, max_samples=2_000_000):
