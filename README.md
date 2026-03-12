@@ -1,124 +1,56 @@
-# ComfyUI 全景图畸变比例尺节点
+# ComfyUI 全景/深度/位姿/尺寸估计节点
 
-本仓库提供 **6 个节点**，用于球面投影全景图中的“畸变感知比例尺估计”、尺寸缩放计算、体积约束推导与深度裁剪区域尺寸估计。
+本仓库提供 **9 个节点**，覆盖你提出的完整链路：
+1. 多张深度图按全景合成结果融合为一张大深度图。
+2. 已知规则房间形状与尺寸，反推相机位姿。
+3. 用位姿 + 深度，对全景任意裁剪区域做真实尺寸估计。
 
-## 设计逻辑
+## 关键新增节点（对应你的 3 个需求）
 
-### 1) `Panorama Distortion Scale Table`
-输入：`image`, `room_length_m`, `room_width_m`, `room_height_m`
+### A) `Panorama Depth Fusion (From Stitch Result)`
+- 内部类名：`PanoramaDepthFusionFromStitch`
+- 输入：`depth_images`（可为 batch 多张深度图）、`panorama_image`、`depth_is_meters`、`blend_strength`
+- 输出：`fused_depth_image`、`depth_scale_factor`、`source_count`
+- 作用：将多张深度图重采样到全景尺寸后，按置信度加权 + 中值稳健融合，得到和全景结果一致的大深度图。
 
-功能：
-- 自动分析图像各水平位置的畸变特性（基于边缘方向一致性，近似对应“直线弧度趋势”）。
-- 基础比例尺按要求定义为：
-  - `base_scale = sqrt(length^2 + width^2) / image_width`
-- 用畸变特性对基础比例尺进行修正，输出“畸变特性-比例尺”表。
+### B) `Room-constrained Camera Pose From Panorama`
+- 内部类名：`RoomPoseFromPanorama`
+- 输入：`panorama_image`、`fused_depth_image`、`room_shape`（`rectangle/circle/triangle`）、`room_size_a_m`、`room_size_b_m`、`room_height_m`、`camera_height_prior_m`
+- 输出：`camera_pose_json` + `camera_x/y/z_m` + `yaw/pitch/roll_deg`
+- 作用：在“规则房间 + 已知尺寸”约束下给出可用的相机位姿估计。
 
-输出：
-- `distortion_scale_table`（JSON 字符串）
-- `base_scale_m_per_px`
-
----
-
-### 2) `Panorama Distortion Feature`
-输入：`image`
-
-功能：
-- 自适应估计图像整体畸变程度（球面投影前提）。
-
-输出：
-- `distortion_feature_value`（数值）
-
----
-
-### 3) `Distortion Scale Lookup (Q70)`
-输入：`distortion_scale_table`, `distortion_feature_value`
-
-功能：
-- 根据节点2给出的畸变值在节点1表格中匹配对应比例尺集合。
-- 输出比例尺采用 **70% 分位点**（Q70）。
-
-输出：
-- `matched_scale_m_per_px`
-- `matched_sample_count`
+### C) `Panorama Crop Real-world Size Estimator`
+- 内部类名：`PanoramaCropMetricEstimator`
+- 输入：
+  - 必填：`fused_depth_image`、`camera_pose_json`、`crop_x/y/w/h`、`depth_is_meters`、`box_index`、`match_max_side`
+  - 可选1：`panorama_image` + `crop_image`（自动模板匹配定位）
+  - 可选2：`boxes_json`（直接读取框坐标，再按 `box_index` 选框）
+- 输出：`estimated_width_m`、`estimated_height_m`、`estimated_area_m2`、`median_depth_m`、`center_yaw_deg`、`center_pitch_deg`、`bbox_x/y/w/h`、`match_score`、`bbox_source`
+- 作用：对全景中任意裁剪区域做米制尺寸估计，并支持“传 crop 图自动找位置”或“传 boxes_json 直接取框”。`match_max_side` 可控制模板匹配降采样上限，避免超大全景时节点卡顿。
 
 ---
 
-### 4) `Scaled Dimensions`
-输入：`width(INT)`, `height(INT)`, `scale(FLOAT)`
+## 其他现有节点
 
-功能：
-- 计算缩放后的尺寸：
-  - `scaled_width = width * scale`
-  - `scaled_height = height * scale`
-- 输出类型为 `FLOAT`，支持小数结果（例如 `0.12382`）。
-- 适配 ComfyUI 自带“获取图像尺寸”节点输出的宽高整型数值。
+1. `Panorama Distortion Scale Table`
+2. `Panorama Distortion Feature`
+3. `Distortion Scale Lookup (Q70)`
+4. `Scaled Dimensions`
+5. `Proportional Volume Limiter`
+6. `Panorama Depth Crop Size Estimator`
 
-输出：
-- `scaled_width`
-- `scaled_height`
+这些节点仍可用于你原有的比例尺估计、体积约束和局部深度尺寸估计工作流。
 
----
+## 推荐工作流（对应你的需求）
 
-### 5) `Proportional Volume Limiter`
-输入：`length`, `width`, `height`, `scaled_width`, `scaled_height`
-
-功能：
-- 在保持 `length:width:height` 比例不变的基础上，计算 4 种体积：
-  1. 将 `scaled_width` 作为长时的体积。
-  2. 将 `scaled_width` 作为宽时的体积。
-  3. 将 `scaled_width` 作为对角线 `sqrt(length^2 + width^2)` 时的体积。
-  4. 将 `scaled_height` 作为高时的体积。
-- 取上述 4 个体积中的最小值作为 `output`。
-- 同时输出最小体积对应的 `length`、`width`、`height`，以及 4 个体积值。
-
-输出：
-- `length`
-- `width`
-- `height`
-- `output`
-- `volume_with_scaled_width_as_length`
-- `volume_with_scaled_width_as_width`
-- `volume_with_scaled_width_as_diagonal`
-- `volume_with_scaled_height_as_height`
-
----
-
-### 6) `Panorama Depth Crop Size Estimator`
-输入：`depth_image`, `room_length_m`, `room_width_m`, `room_height_m`, `crop_image`, `depth_is_meters`
-
-功能：
-- 在全景深度图 `depth_image` 中自动匹配 `crop_image` 的位置（模板匹配）。
-- 已知房间长宽高后，按球面全景角分辨率估计裁剪区域实际尺寸：
-  - `estimated_width_m ≈ depth * (crop_w * 2π / pano_w)`
-  - `estimated_height_m ≈ depth * (crop_h * π / pano_h)`
-- 若 `depth_is_meters=true`，深度图数值直接视为米。
-- 若 `depth_is_meters=false`，自动将深度图 95 分位映射到房间平面对角线，以完成未标定深度图到米制的近似换算。
-
-输出：
-- `estimated_width_m`
-- `estimated_height_m`
-- `estimated_area_m2`
-- `estimated_depth_m`
-- `bbox_x`, `bbox_y`, `bbox_w`, `bbox_h`
-- `match_score`
-
-## 典型工作流
-
-`Load Image`
-→ `Panorama Distortion Scale Table`
-→ `Panorama Distortion Feature`
-→ `Distortion Scale Lookup (Q70)`
-→ `Scaled Dimensions`
-→ `Proportional Volume Limiter`
-
-或（深度裁剪尺寸估计场景）：
-
-`Load Depth Image`
-→ `Panorama Depth Crop Size Estimator`
+`Load Depth Images (batch)` + `Load Panorama Image`
+→ `Panorama Depth Fusion (From Stitch Result)`
+→ `Room-constrained Camera Pose From Panorama`
+→ `Panorama Crop Real-world Size Estimator`
 
 ## 安装
 
-将本仓库放到 ComfyUI 的 `custom_nodes` 目录并重启 ComfyUI。
+将本仓库放到 ComfyUI 的 `custom_nodes` 目录并重启 ComfyUI：
 
 ```bash
 ComfyUI/custom_nodes/100-AIcode-camaraposition
