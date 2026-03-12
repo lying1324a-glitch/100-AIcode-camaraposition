@@ -83,8 +83,8 @@ class PanoramaDistortionFeatureNode:
         _validate_image(image)
         feature_map = _compute_distortion_feature_map(image)
         # 采用 70% 分位之前的稳健聚合：全局数值用中位+高位加权
-        median = torch.quantile(feature_map, 0.5).item()
-        q70 = torch.quantile(feature_map, 0.7).item()
+        median = _safe_quantile(feature_map, 0.5)
+        q70 = _safe_quantile(feature_map, 0.7)
         global_feature = 0.4 * median + 0.6 * q70
         return (float(global_feature),)
 
@@ -129,7 +129,7 @@ class DistortionScaleLookupNode:
             matched = sorted_rows[:k]
 
         scales = torch.tensor([float(r["scale_m_per_px"]) for r in matched], dtype=torch.float32)
-        q70_scale = torch.quantile(scales, 0.7).item()
+        q70_scale = _safe_quantile(scales, 0.7)
         return (float(q70_scale), int(len(matched)))
 
 
@@ -398,7 +398,7 @@ class PanoramaDepthFusionFromStitchNode:
         fused = alpha * weighted_mean + (1.0 - alpha) * median_map
 
         if not bool(depth_is_meters):
-            q95 = float(torch.quantile(fused.view(-1), 0.95).item())
+            q95 = _safe_quantile(fused, 0.95)
             scale = 1.0 / max(q95, 1e-8)
             fused = fused * scale
         else:
@@ -602,7 +602,7 @@ class PanoramaCropMetricEstimatorNode:
             ref_a = float(pose.get("room_size_a_m", 5.0))
             ref_b = float(pose.get("room_size_b_m", 4.0))
             diag = math.sqrt(ref_a * ref_a + ref_b * ref_b)
-            q95 = float(torch.quantile(depth.view(-1), 0.95).item())
+            q95 = _safe_quantile(depth, 0.95)
             depth_m = max(1e-4, depth_med / max(q95, 1e-8) * diag)
 
         yaw_per_px = (2.0 * math.pi) / float(pano_w)
@@ -635,6 +635,26 @@ class PanoramaCropMetricEstimatorNode:
             str(bbox_source),
         )
 
+
+
+
+def _safe_quantile(tensor, q, max_samples=2_000_000):
+    """
+    对大张量做稳健分位数计算：
+    - 小张量直接 torch.quantile
+    - 大张量随机子采样后近似 quantile，避免 RuntimeError: input tensor is too large
+    """
+    flat = tensor.reshape(-1)
+    count = int(flat.numel())
+    if count <= 0:
+        raise ValueError("quantile 输入为空")
+
+    if count > int(max_samples):
+        # 使用均匀随机采样近似分位数，控制内存和算子输入规模
+        idx = torch.randint(0, count, (int(max_samples),), device=flat.device)
+        flat = flat[idx]
+
+    return float(torch.quantile(flat, float(q)).item())
 
 
 def _extract_box_from_json(boxes_json, box_index):
@@ -847,7 +867,7 @@ def _estimate_depth_in_meters(patch, full_depth, room_length_m, room_width_m, ro
     # 对未标定深度图进行简单尺度归一：将95分位映射到房间平面对角线。
     # 该假设适配典型矩形房间全景：最远可见点通常接近水平对角尺度。
     room_diag = math.sqrt(room_length_m * room_length_m + room_width_m * room_width_m)
-    q95 = float(torch.quantile(full_depth.view(-1), 0.95).item())
+    q95 = _safe_quantile(full_depth, 0.95)
     if q95 <= 1e-8:
         raise ValueError("depth_image 数值无效，无法估计深度尺度")
 
