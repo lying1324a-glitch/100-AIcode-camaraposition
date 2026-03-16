@@ -1,6 +1,6 @@
 # ComfyUI 全景/深度/位姿/尺寸估计节点
 
-本仓库提供 **9 个节点**，覆盖你提出的完整链路：
+本仓库提供 **多节点工具集**，覆盖你提出的完整链路：
 1. 多张深度图按全景合成结果融合为一张大深度图。
 2. 已知规则房间形状与尺寸，反推相机位姿。
 3. 用位姿 + 深度，对全景任意裁剪区域做真实尺寸估计。
@@ -32,13 +32,14 @@
 
 ## 其他现有节点
 
-1. `Image Tensor -> Numpy Bridge`（将 Comfy 的 torch IMAGE 转为 numpy，兼容只接受 numpy 的第三方节点）
-2. `Panorama Distortion Scale Table`
-3. `Panorama Distortion Feature`
-4. `Distortion Scale Lookup (Q70)`
-5. `Scaled Dimensions`
-6. `Proportional Volume Limiter`
-7. `Panorama Depth Crop Size Estimator`
+1. `Image Tensor -> Numpy Bridge`（任意图像输入转 numpy 输出，并返回 source_device）
+2. `Image Numpy -> Tensor Bridge (Device-aware)`（可按 source_device 或指定设备恢复为 torch tensor，便于后续继续在 GPU 跑）
+3. `Panorama Distortion Scale Table`
+4. `Panorama Distortion Feature`
+5. `Distortion Scale Lookup (Q70)`
+6. `Scaled Dimensions`
+7. `Proportional Volume Limiter`
+8. `Panorama Depth Crop Size Estimator`
 
 这些节点仍可用于你原有的比例尺估计、体积约束和局部深度尺寸估计工作流。
 
@@ -48,6 +49,22 @@
 → `Panorama Depth Fusion (From Stitch Result)`
 → `Room-constrained Camera Pose From Panorama`
 → `Panorama Crop Real-world Size Estimator`
+
+
+## Numpy-only 第三方节点的标准桥接工作流（GPU可恢复）
+
+推荐直接按下面连接：
+
+`torch节点`
+→ `Image Tensor -> Numpy Bridge`
+→ `(numpy-only第三方节点)`
+→ `Image Numpy -> Tensor Bridge (Device-aware)`（`device_mode=source`，`source_device` 接前一节点输出）
+→ `后续torch节点`
+
+说明：
+- `Image Tensor -> Numpy Bridge` 会输出 `numpy_image` 和 `source_device`（例如 `cuda:0`）。
+- 将 `source_device` 连到 `Image Numpy -> Tensor Bridge (Device-aware)` 的同名输入，并把 `device_mode` 设为 `source`，即可在 numpy-only 节点之后自动回到原始 GPU 设备（若可用）。
+- 若当前环境无 CUDA，节点会自动回退到 CPU，避免报错。
 
 ## 安装
 

@@ -9,31 +9,85 @@ import torch.nn.functional as F
 ROOM_SHAPES = ["rectangle", "circle", "triangle"]
 
 
+class _AnyType(str):
+    def __ne__(self, __value):
+        return False
+
+
+ANY_TYPE = _AnyType("*")
+
+
 class ImageTensorToNumpyBridgeNode:
     """
     兼容节点：
     - 输入：ComfyUI IMAGE（通常为 torch.Tensor）
-    - 输出：numpy.ndarray 形式的 IMAGE，兼容仅接受 numpy 的第三方节点
+    - 输出：numpy.ndarray + 来源设备字符串，供后续还原到 GPU
     """
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"image": ("IMAGE",)}}
+        return {"required": {"image": (ANY_TYPE,)}}
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
+    RETURN_TYPES = (ANY_TYPE, "STRING")
+    RETURN_NAMES = ("numpy_image", "source_device")
     FUNCTION = "to_numpy_image"
     CATEGORY = "Panorama/Utility"
 
     def to_numpy_image(self, image):
         if isinstance(image, np.ndarray):
-            return (image,)
+            arr = image
+            if arr.dtype != np.float32:
+                arr = arr.astype(np.float32, copy=False)
+            return (arr, "cpu")
 
         if torch.is_tensor(image):
+            src_device = str(image.device)
             arr = image.detach().cpu().numpy()
-            return (arr,)
+            if arr.dtype != np.float32:
+                arr = arr.astype(np.float32, copy=False)
+            return (arr, src_device)
 
         raise ValueError(f"Unsupported image type: {type(image)}")
+
+
+class ImageNumpyToTensorBridgeNode:
+    """
+    兼容节点：
+    - 输入：numpy.ndarray（或 torch.Tensor）
+    - 输出：torch.Tensor（可选恢复到 source_device / 指定 device）
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": (ANY_TYPE,),
+                "device_mode": (["auto", "source", "cpu", "cuda"],),
+                "source_device": ("STRING", {"default": "cpu"}),
+            }
+        }
+
+    RETURN_TYPES = (ANY_TYPE, "STRING")
+    RETURN_NAMES = ("tensor_image", "final_device")
+    FUNCTION = "to_tensor_image"
+    CATEGORY = "Panorama/Utility"
+
+    def to_tensor_image(self, image, device_mode, source_device):
+        if torch.is_tensor(image):
+            tensor = image
+        elif isinstance(image, np.ndarray):
+            arr = image
+            if arr.dtype != np.float32:
+                arr = arr.astype(np.float32, copy=False)
+            tensor = torch.from_numpy(arr)
+        else:
+            raise ValueError(f"Unsupported image type: {type(image)}")
+
+        target = _resolve_target_device(device_mode, source_device)
+        if target is not None:
+            tensor = tensor.to(target, non_blocking=True)
+
+        return (tensor, str(tensor.device))
 
 
 class PanoramaDistortionScaleTableNode:
@@ -673,6 +727,28 @@ class PanoramaCropMetricEstimatorNode:
 
 
 
+
+def _resolve_target_device(device_mode, source_device):
+    mode = str(device_mode).lower().strip()
+    src = str(source_device).strip() if source_device is not None else ""
+
+    if mode == "cpu":
+        return "cpu"
+    if mode == "cuda":
+        if torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
+    if mode == "source":
+        if src.startswith("cuda") and torch.cuda.is_available():
+            return src
+        return "cpu"
+
+    # auto: 优先使用 source_device（若可用），否则保持当前默认设备行为
+    if src.startswith("cuda") and torch.cuda.is_available():
+        return src
+    return None
+
+
 def _parse_int_with_default(value, default_value, min_value=None, max_value=None):
     if value is None:
         parsed = int(default_value)
@@ -966,6 +1042,7 @@ def _estimate_depth_in_meters(patch, full_depth, room_length_m, room_width_m, ro
 
 NODE_CLASS_MAPPINGS = {
     "ImageTensorToNumpyBridge": ImageTensorToNumpyBridgeNode,
+    "ImageNumpyToTensorBridge": ImageNumpyToTensorBridgeNode,
     "PanoramaDistortionScaleTable": PanoramaDistortionScaleTableNode,
     "PanoramaDistortionFeature": PanoramaDistortionFeatureNode,
     "DistortionScaleLookup": DistortionScaleLookupNode,
@@ -979,6 +1056,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageTensorToNumpyBridge": "Image Tensor -> Numpy Bridge",
+    "ImageNumpyToTensorBridge": "Image Numpy -> Tensor Bridge (Device-aware)",
     "PanoramaDistortionScaleTable": "Panorama Distortion Scale Table",
     "PanoramaDistortionFeature": "Panorama Distortion Feature",
     "DistortionScaleLookup": "Distortion Scale Lookup (Q70)",
