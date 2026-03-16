@@ -32,12 +32,13 @@
 
 ## 其他现有节点
 
-1. `Panorama Distortion Scale Table`
-2. `Panorama Distortion Feature`
-3. `Distortion Scale Lookup (Q70)`
-4. `Scaled Dimensions`
-5. `Proportional Volume Limiter`
-6. `Panorama Depth Crop Size Estimator`
+1. `Image Tensor -> Numpy Bridge`（将 Comfy 的 torch IMAGE 转为 numpy，兼容只接受 numpy 的第三方节点）
+2. `Panorama Distortion Scale Table`
+3. `Panorama Distortion Feature`
+4. `Distortion Scale Lookup (Q70)`
+5. `Scaled Dimensions`
+6. `Proportional Volume Limiter`
+7. `Panorama Depth Crop Size Estimator`
 
 这些节点仍可用于你原有的比例尺估计、体积约束和局部深度尺寸估计工作流。
 

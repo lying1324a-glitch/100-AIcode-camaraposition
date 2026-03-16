@@ -1,11 +1,39 @@
 import json
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 
 ROOM_SHAPES = ["rectangle", "circle", "triangle"]
+
+
+class ImageTensorToNumpyBridgeNode:
+    """
+    兼容节点：
+    - 输入：ComfyUI IMAGE（通常为 torch.Tensor）
+    - 输出：numpy.ndarray 形式的 IMAGE，兼容仅接受 numpy 的第三方节点
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",)}}
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "to_numpy_image"
+    CATEGORY = "Panorama/Utility"
+
+    def to_numpy_image(self, image):
+        if isinstance(image, np.ndarray):
+            return (image,)
+
+        if torch.is_tensor(image):
+            arr = image.detach().cpu().numpy()
+            return (arr,)
+
+        raise ValueError(f"Unsupported image type: {type(image)}")
 
 
 class PanoramaDistortionScaleTableNode:
@@ -937,6 +965,7 @@ def _estimate_depth_in_meters(patch, full_depth, room_length_m, room_width_m, ro
 
 
 NODE_CLASS_MAPPINGS = {
+    "ImageTensorToNumpyBridge": ImageTensorToNumpyBridgeNode,
     "PanoramaDistortionScaleTable": PanoramaDistortionScaleTableNode,
     "PanoramaDistortionFeature": PanoramaDistortionFeatureNode,
     "DistortionScaleLookup": DistortionScaleLookupNode,
@@ -949,6 +978,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "ImageTensorToNumpyBridge": "Image Tensor -> Numpy Bridge",
     "PanoramaDistortionScaleTable": "Panorama Distortion Scale Table",
     "PanoramaDistortionFeature": "Panorama Distortion Feature",
     "DistortionScaleLookup": "Distortion Scale Lookup (Q70)",
